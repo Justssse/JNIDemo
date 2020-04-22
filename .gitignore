@@ -13,3 +13,5 @@
 .externalNativeBuild
 .cxx
 /.idea/
+/app/src/main/libs/
+/app/src/main/obj/
