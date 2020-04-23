@@ -62,6 +62,8 @@
 #define MAX_NUM_FINGERS 20
 #define MAX_FID_VALUE 0x7FFFFFFF  // Arbitrary limit
 
+u_int32_t current = 0;
+
 /**
  * Most devices will have an internal state machine resembling this. There are 3 basic states, as
  * shown below. When device is not authenticating or enrolling, it is expected to be in
@@ -350,10 +352,10 @@ static int fingerprint_enroll(struct fingerprint_device *device,
         dev->device.notify(&msg);
         return 0;
     }
-    if (hat->challenge != dev->challenge && !(hat->authenticator_type & HW_AUTH_FINGERPRINT)) {
-        dev->device.notify(&msg);
-        return 0;
-    }
+//    if (hat->challenge != dev->challenge && !(hat->authenticator_type & HW_AUTH_FINGERPRINT)) {
+//        dev->device.notify(&msg);
+//        return 0;
+//    }
 
     dev->user_id = hat->user_id;
 
@@ -393,11 +395,26 @@ static uint64_t fingerprint_pre_enroll(struct fingerprint_device *device) {
 
 static int fingerprint_post_enroll(struct fingerprint_device* device) {
     ALOGD("----------------> %s ----------------->", __FUNCTION__);
-    qemu_fingerprint_device_t* qdev = (qemu_fingerprint_device_t*)device;
+//    qemu_fingerprint_device_t* qdev = (qemu_fingerprint_device_t*)device;
+//
+//    pthread_mutex_lock(&qdev->lock);
+//    qdev->challenge = 0;
+//    pthread_mutex_unlock(&qdev->lock);
 
-    pthread_mutex_lock(&qdev->lock);
-    qdev->challenge = 0;
-    pthread_mutex_unlock(&qdev->lock);
+
+    fingerprint_msg_t msg = {0, {0}};
+    qemu_fingerprint_device_t* dev = (qemu_fingerprint_device_t*)device;
+    //模拟录入一下的情况,APK调用fingerprintManager的postEnroll方法即可
+    if (current <= MAX_NUM_FINGERS){
+        current++;
+    } else{
+        current = 0;
+    }
+    msg.type = FINGERPRINT_TEMPLATE_ENROLLING;
+    msg.data.enroll.finger.fid = 1;
+    msg.data.enroll.finger.gid = 100;
+    msg.data.enroll.samples_remaining = (MAX_NUM_FINGERS - current);
+    dev->device.notify(&msg);
 
     return 0;
 }
