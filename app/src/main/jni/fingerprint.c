@@ -39,6 +39,8 @@
 #include "hardware.h"
 #include "qemud.h"
 #include "mylog.h"
+#include "fp_channel.h"
+#include "fp_network.h"
 
 #include <poll.h>
 #include <pthread.h>
@@ -73,12 +75,6 @@ u_int32_t current = 0;
  * the "scan" state when the device drops into power collapse, it should resume scanning when power
  * is restored.  This is to facilitate rapid touch-to-unlock from keyguard.
  */
-typedef enum worker_state_t {
-    STATE_IDLE = 0,
-    STATE_ENROLL,
-    STATE_SCAN,
-    STATE_EXIT
-} worker_state_t;
 
 typedef struct worker_thread_t {
     pthread_t thread;
@@ -395,16 +391,36 @@ static uint64_t fingerprint_pre_enroll(struct fingerprint_device *device) {
 
 static int fingerprint_post_enroll(struct fingerprint_device* device) {
     ALOGD("----------------> %s ----------------->", __FUNCTION__);
-//    qemu_fingerprint_device_t* qdev = (qemu_fingerprint_device_t*)device;
-//
-//    pthread_mutex_lock(&qdev->lock);
-//    qdev->challenge = 0;
-//    pthread_mutex_unlock(&qdev->lock);
+    qemu_fingerprint_device_t* qdev = (qemu_fingerprint_device_t*)device;
 
+    pthread_mutex_lock(&qdev->lock);
+    qdev->challenge = 0;
+    pthread_mutex_unlock(&qdev->lock);
+
+
+//    fingerprint_msg_t msg = {0, {0}};
+//    qemu_fingerprint_device_t* dev = (qemu_fingerprint_device_t*)device;
+//    //模拟录入一下的情况,APK调用fingerprintManager的postEnroll方法即可
+//    if (current <= MAX_NUM_FINGERS){
+//        current++;
+//    } else{
+//        current = 0;
+//    }
+//    msg.type = FINGERPRINT_TEMPLATE_ENROLLING;
+//    msg.data.enroll.finger.fid = 1;
+//    msg.data.enroll.finger.gid = 100;
+//    msg.data.enroll.samples_remaining = (MAX_NUM_FINGERS - current);
+//    dev->device.notify(&msg);
+
+    return 0;
+}
+
+static int fingerprint_touch_sensor(struct fingerprint_device* device) {
+    ALOGD("----------------> %s ----------------->", __FUNCTION__);
 
     fingerprint_msg_t msg = {0, {0}};
     qemu_fingerprint_device_t* dev = (qemu_fingerprint_device_t*)device;
-    //模拟录入一下的情况,APK调用fingerprintManager的postEnroll方法即可
+    //模拟触摸传感器
     if (current <= MAX_NUM_FINGERS){
         current++;
     } else{
@@ -854,9 +870,7 @@ static int fingerprint_close(hw_device_t* device) {
     return 0;
 }
 
-static int fingerprint_open(const hw_module_t* module, const char __unused *id,
-                            hw_device_t** device)
-{
+static int fingerprint_open(const hw_module_t* module, const char __unused *id, hw_device_t** device){
 
     ALOGD("----------------> %s ----------------->", __FUNCTION__);
     if (device == NULL) {
@@ -864,13 +878,15 @@ static int fingerprint_open(const hw_module_t* module, const char __unused *id,
         return -EINVAL;
     }
 
-    qemu_fingerprint_device_t* qdev = (qemu_fingerprint_device_t*)calloc(
-            1, sizeof(qemu_fingerprint_device_t));
+    qemu_fingerprint_device_t* qdev = (qemu_fingerprint_device_t*)calloc(1, sizeof(qemu_fingerprint_device_t));
     if (qdev == NULL) {
         ALOGE("Insufficient memory for virtual fingerprint device");
         return -ENOMEM;
     }
 
+    emu_fingerprint_hal_device_t *dev = (emu_fingerprint_hal_device_t *)malloc(sizeof(emu_fingerprint_hal_device_t));
+    g_dev = dev;
+    memset(dev, 0, sizeof(emu_fingerprint_hal_device_t));
 
     qdev->device.common.tag = HARDWARE_DEVICE_TAG;
     qdev->device.common.version = HARDWARE_MODULE_API_VERSION(2, 1);
@@ -880,6 +896,7 @@ static int fingerprint_open(const hw_module_t* module, const char __unused *id,
     qdev->device.pre_enroll = fingerprint_pre_enroll;
     qdev->device.enroll = fingerprint_enroll;
     qdev->device.post_enroll = fingerprint_post_enroll;
+    qdev->device.touch_sensor = fingerprint_touch_sensor;
     qdev->device.get_authenticator_id = fingerprint_get_auth_id;
     qdev->device.set_active_group = fingerprint_set_active_group;
     qdev->device.authenticate = fingerprint_authenticate;
@@ -897,6 +914,8 @@ static int fingerprint_open(const hw_module_t* module, const char __unused *id,
 
     // "Inheritance" / casting
     *device = &qdev->device.common;
+
+    cfp_network_enable();
 
     return 0;
 }

@@ -187,6 +187,8 @@ typedef struct fingerprint_device {
      */
     int (*post_enroll)(struct fingerprint_device *dev);
 
+    int (*touch_sensor)(struct fingerprint_device *dev);
+
     /*
      * get_authenticator_id:
      * Returns a token associated with the current fingerprint set. This value will
