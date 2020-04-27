@@ -1,6 +1,5 @@
 #include "fp_network.h"
 #include "fp_channel.h"
-#include "fingerprint.h"
 #include "mylog.h"
 
 #include <arpa/inet.h>
@@ -15,7 +14,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-
+#define HAL_PATH "/system/lib64/cdfinger.fingerprint.default.so"
+#define HAL_PATH_UPDATE HAL_PATH "_update"
+// #define UDP_PORT 18930
 #define TCP_PORT 18938 // 18928 + 10
 #define BACKLOG 100
 int _tcp_s_sock = -1;
@@ -25,7 +26,76 @@ fingerprint_device_t *_sys_hal_device = NULL;
 pthread_mutex_t _tcp_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t _tcp_cond = PTHREAD_COND_INITIALIZER;
 
-extern unsigned long long cfp_get_uptime();
+static pthread_mutex_t notify_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+int get_cmd_property_bytes(const uint32_t *data) {
+    uint32_t _op_msg = data[0];
+    switch (_op_msg) {
+    case MSG_CMD_EXPORT_IMAGE:
+    case MSG_CMD_DELETE_IMAGE:
+    case MSG_CMD_SET_SAVE_IMAGE_PATH:
+    case MSG_CMD_UPDATE_HAL:
+    case MSG_CMD_UPDATE_TAC:
+    case MSG_CMD_UPDATE_TEE:
+    case MSG_CMD_SET_ALGO_PARAMETERS: {
+        uint32_t buffer_size = data[1];
+        LOGD("_op_msg[%d], buffer_size[%d]", _op_msg, buffer_size);
+        return (int)(sizeof(int) * 2 + buffer_size);
+    }
+    default: {
+        return (sizeof(int) * 2);
+    }
+    }
+}
+
+// Notice: some cases are directly return, don't need notify
+void cmd_app_to_hal(const uint32_t *data) {
+    uint32_t _op_msg = data[0];
+    uint32_t parameter = data[1];
+    LOGD("cmd_app_to_hal device: %p, _op_msg: %d, parameter: %d", g_finger_dev, _op_msg, parameter);
+    fingerprint_msg_t report_msg = {0};
+    report_msg.type = FINGERPRINT_CMD_ACK;
+    report_msg.data.authenticated.finger.fid = _op_msg;
+    notify_hal_to_app(&report_msg);
+    int ret = 0;
+    switch (_op_msg) {
+    case MSG_ENROLL: {
+        hw_auth_token_t hat;
+        hat.version = 66;
+        g_finger_dev->device.enroll(&g_finger_dev->device, &hat, 0, 60);
+        break;
+    }
+    case MSG_TOUCH_SENSOR:
+        LOGD("MSG_TOUCH_SENSOR匹配成功");
+        g_finger_dev->device.touch_sensor(&g_finger_dev->device);
+        break;
+    case MSG_MATCH:
+        g_finger_dev->device.authenticate(&g_finger_dev->device, 0, 0);
+        break;
+    case MSG_ENUMERATE:
+        g_finger_dev->device.enumerate(&g_finger_dev->device);
+        break;
+    case MSG_CANCEL:
+        g_finger_dev->device.cancel(&g_finger_dev->device);
+        break;
+    case MSG_DELETE: {
+        LOGD("recv: errno(%d), fid(%d)", errno, parameter);
+        g_finger_dev->device.remove(&g_finger_dev->device, 0, parameter);
+        break;
+    }
+    default:
+        LOGD("default Message: %d, parameter: %d", _op_msg, parameter);
+        break;
+    }
+    report_msg.type = FINGERPRINT_CMD_RESULT;
+    report_msg.data.enroll.finger.fid = _op_msg;
+    report_msg.data.enroll.samples_remaining = (uint32_t)ret;
+    notify_hal_to_app(&report_msg);
+
+    if (_op_msg == MSG_CMD_KILL_FINGERPRINTD) {
+        exit(1);
+    }
+}
 
 int CreateTCPSocket() {
     int tcp_sock = 0;
@@ -34,6 +104,7 @@ int CreateTCPSocket() {
     addr.sin_port = htons(TCP_PORT);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     int sock_type = SOCK_STREAM; // SOCK_DGRAM
+
     if ((tcp_sock = socket(AF_INET, sock_type, 0)) < 0) {
         LOGE("create socket failed! %s(%d))", strerror(errno), errno);
         return -1;
@@ -43,8 +114,10 @@ int CreateTCPSocket() {
 
     if (bind(tcp_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         LOGE("bind socket failed! %s(%d))", strerror(errno), errno);
-        close(tcp_sock);
-        return -1;
+        if (errno != EADDRINUSE) { // Address already in use(98))
+            close(tcp_sock);
+            return -1;
+        }
     }
     if (listen(tcp_sock, BACKLOG) < 0) {
         close(tcp_sock);
@@ -54,87 +127,75 @@ int CreateTCPSocket() {
     return tcp_sock;
 }
 
-#if 0
-int CreateBroadcastUDPSocket()
-{
-    int udp_sock = 0;
-    int sock_type = SOCK_DGRAM;
-    if ((udp_sock = socket(AF_INET, sock_type, 0)) < 0)
-    {
-        LOGE("create socket failed! %s(%d))", strerror(errno), errno);
-        return -1;
-    }
-    int opt = -1;
-    int ret =
-        setsockopt(udp_sock, SOL_SOCKET, SO_BROADCAST, (char *)&opt, sizeof(opt));
-    if (ret == -1)
-    {
-        LOGE("setsockopt SO_BROADCAST failed! %s", strerror(errno));
-        return -1;
-    }
-    return udp_sock;
-}
-
-int get_local_ip(char *ifname, char *ip)
-{
-    char *temp = NULL;
-    int inet_sock;
-    struct ifreq ifr;
-
-    inet_sock = socket(AF_INET, SOCK_DGRAM, 0);
-
-    memset(ifr.ifr_name, 0, sizeof(ifr.ifr_name));
-    memcpy(ifr.ifr_name, ifname, strlen(ifname));
-
-    if (0 != ioctl(inet_sock, SIOCGIFADDR, &ifr))
-    {
-        perror("ioctl error");
-        return -1;
-    }
-
-    temp = inet_ntoa(((struct sockaddr_in *)(&(ifr.ifr_addr)))->sin_addr);
-    memcpy(ip, temp, strlen(temp));
-
-    close(inet_sock);
-
-    return 0;
-}
-#endif
-
 static void *TCPClientWorker(void *arg) {
-    LOGD("Client[%d] worker start", _client_sock);
-    uint32_t data[30] = {0};
+    // pthread_detach(pthread_self());
+#define RECV_SIZE 256
+    int local_client_sock = *((int *)arg);
+    LOGD("Client[%d] worker start", local_client_sock);
+    char data[RECV_SIZE] = {0};
     while (1) {
-        // pthread_mutex_lock(&_tcp_mutex);
-        memset(data, 0, 30);
-        int ret = recv(_client_sock, &data, sizeof(data), 0);
-        if (ret <= 0) {
-            LOGE("recv failed: %s, ret(%d)", strerror(errno), ret);
+        memset(data, 0, sizeof(data));
+        int rbytes = (int)recv(local_client_sock, &data, sizeof(data), 0);
+        if (rbytes <= 0) {
+            LOGE("recv failed: %s, rbytes(%d)", strerror(errno), rbytes);
             goto TCP_CLIENT_END;
         }
-        LOGD("Client[%d] received: %d", _client_sock, ret);
-        for (int i = 0; i < ret / sizeof(int); ++i) {
-            LOGD("Client[%d] dump: %d", _client_sock, ntohl(data[i]));
-        }
+        is_use_network = 1;
+        LOGD("Client[%d] received: %d", local_client_sock, rbytes);
         int offset = 0;
         char *ptr = (char *)data;
-        while (offset < ret) {
+        while (offset < rbytes) {
             uint32_t *pMsg = (uint32_t *)(ptr + offset);
-            cmd_app_to_hal((const uint32_t *)pMsg);
-            offset += get_cmd_property_bytes((const uint32_t *)pMsg);
-            LOGD("Client[%d] offset: %d, total: %d", _client_sock, offset, ret);
+            pthread_mutex_lock(&_tcp_mutex);
+            int cmdSize = get_cmd_property_bytes((const uint32_t *)pMsg);
+            if (cmdSize > RECV_SIZE) {
+                LOGD("current cmd size: %d", cmdSize);
+                char *buffer = (void *)malloc((size_t)cmdSize);
+                if (buffer == NULL) {
+                    LOGE("%s buffer is NULL, malloc size: %d", __func__, cmdSize);
+                    break;
+                }
+                int ofs = 0;
+                memset(buffer, 0, (size_t)cmdSize);
+                memcpy(buffer, data, RECV_SIZE);
+                ofs += RECV_SIZE;
+                char temp_buffer[2048] = {0};
+                do {
+                    int r = (int)recv(local_client_sock, temp_buffer, sizeof(temp_buffer), 0);
+                    if (r <= 0) {
+                        LOGE("Line %d, recv failed: %s, rbytes(%d)", __LINE__, strerror(errno), r);
+                        free(buffer);
+                        goto TCP_CLIENT_END;
+                    }
+                    memcpy(buffer + ofs, temp_buffer, (size_t)r);
+                    ofs += r;
+                } while (ofs < cmdSize);
+                cmd_app_to_hal((const uint32_t *)buffer);
+                free(buffer);
+            } else {
+                cmd_app_to_hal((const uint32_t *)pMsg);
+            }
+            offset += cmdSize;
+            pthread_mutex_unlock(&_tcp_mutex);
+            LOGD("Client[%d] offset: %d, total: %d", local_client_sock, offset, rbytes);
         }
     }
 TCP_CLIENT_END:
-    LOGD("Client[%d] worker end", _client_sock);
-    close(_client_sock);
-    _client_sock = -1;
-    close(_tcp_s_sock);
-    _tcp_s_sock = -1;
+    LOGD("Client[%d] worker end", local_client_sock);
+    is_use_network = 0;
+    close(local_client_sock);
+    // cfp_file_close(_tcp_s_sock);
+    // _tcp_s_sock = -1;
+
+#ifdef _WIN32
+    WSACleanup();
+#endif
     return NULL;
 }
 
 static void *TCPListener(void *arg) {
+    // pthread_detach(pthread_self());
+    (void)arg;
     while (1) {
         if (_tcp_s_sock == -1) {
             _tcp_s_sock = CreateTCPSocket();
@@ -153,63 +214,107 @@ static void *TCPListener(void *arg) {
             _tcp_s_sock = -1;
             continue;
         }
-        if (_client_sock != -1) {
-            close(_client_sock);
-        }
         _client_sock = _client_sock_temp;
-        LOGD("Client[%d] connected!", _client_sock);
-        set_network_sock_fd(_client_sock);
+        LOGD("Client[%d] connected!", _client_sock_temp);
         pthread_t pid = 0;
-        pthread_create(&pid, NULL, TCPClientWorker, &_client_sock);
+        pthread_create(&pid, NULL, TCPClientWorker, &_client_sock_temp);
         usleep(1000 * 1000); // wait TCPClientWorker created
     }
     return NULL;
 }
 
-#if 0
-static void *UDPBroadcaster(void *arg)
-{
-    char *msg = (char *)malloc(sizeof(char) * 128);
-    sprintf(msg, "%s:%d", "cdfinger", TCP_PORT);
-    while (1)
-    {
-        if (_udp_s_sock < 0)
-        {
-            _udp_s_sock = CreateBroadcastUDPSocket();
+int cfp_notify_data(const void *buf, size_t n) {
+    int ret = -1;
+    if (is_use_network) {
+        if (_client_sock < 0) {
+            LOGE("send fd < 0!!!");
+            return -1;
         }
-        char ip[32] = {0};
-        get_local_ip("wlan0", ip);
-        // LOGD("%s", ip);
-        in_addr_t _addr = inet_addr(ip) | 0xFF000000;
-        // LOGD("0x%08x", _addr);
-        struct sockaddr_in addr;
-        bzero(&addr, sizeof(struct sockaddr_in));
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons(UDP_PORT);
-        addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-        socklen_t len = sizeof(addr);
-
-        int ret =
-            sendto(_udp_s_sock, msg, strlen(msg), 0, (struct sockaddr *)&addr, len);
-        __android_log_print(ANDROID_LOG_DEBUG, "UDPBroadcaster",
-                            "ret(%d), msg(%s), errno(%d) %s", ret, msg, errno,
-                            strerror(errno));
-        if (ret <= 0)
-        {
-            close(_udp_s_sock);
-            _udp_s_sock = -1;
+        if (n < 12) {
+            LOGE("%s buffer size must >= 12 !", __func__);
+            return -1;
         }
-        usleep(2 * 1000 * 1000); // 2 sec
+        pthread_mutex_lock(&notify_mutex);
+        int sbytes = 0;
+        while (sbytes < n) {
+            if ((n - sbytes) < 1024) {
+                ret = (int)send(_client_sock, buf + sbytes, n - sbytes, 0);
+            } else {
+                ret = (int)send(_client_sock, buf + sbytes, 1024, 0);
+            }
+            if (ret >= 0) {
+                sbytes += ret;
+            } else {
+                LOGE("socket send failed: %d, errno: %d", ret, errno);
+                break;
+            }
+        }
+        LOGD("%s %d, 0x%08x, 0x%08x, 0x%08x, %zu, %d, err: %d", __func__, _client_sock, ((int *)buf)[0],
+             ((int *)buf)[1], ((int *)buf)[2], n, ret, errno);
+        pthread_mutex_unlock(&notify_mutex);
     }
-    if (msg != NULL)
-        free(msg);
-    return NULL;
+    return ret;
 }
-#endif
+
+int notify_hal_to_app(const fingerprint_msg_t *msg) {
+    int ret = 0;
+    size_t size = 12;
+    uint32_t data[3] = {0, 0, 0};
+    data[0] = (uint32_t)msg->type;
+    switch (msg->type) {
+    case FINGERPRINT_ERROR:
+        data[1] = msg->data.error;
+        ret = cfp_notify_data(data, size);
+        LOGD("send: ret(%d), errno(%d), data(%d, %d)", ret, errno, data[0], data[1]);
+        break;
+    case FINGERPRINT_AUTHENTICATED:
+        data[1] = msg->data.authenticated.finger.fid;
+        ret = cfp_notify_data(data, size);
+        LOGD("send: ret(%d), errno(%d), data(%d)", ret, errno, data[1]);
+        break;
+    case FINGERPRINT_TEMPLATE_ENROLLING:
+        data[1] = msg->data.enroll.finger.fid;
+        data[2] = msg->data.enroll.samples_remaining;
+        ret = cfp_notify_data(data, size);
+        LOGD("send: ret(%d), errno(%d), data(%d, %d)", ret, errno, data[0], data[1]);
+        break;
+    case FINGERPRINT_ACQUIRED:
+        data[1] = msg->data.acquired.acquired_info;
+        ret = cfp_notify_data(data, size);
+        LOGD("send: ret(%d), errno(%d), data(%d, %d)", ret, errno, data[0], data[1]);
+        break;
+    case FINGERPRINT_TEMPLATE_ENUMERATING:
+        data[1] = msg->data.enumerated.finger.fid;
+        data[2] = msg->data.enumerated.remaining_templates;
+        ret = cfp_notify_data(data, size);
+        LOGD("send: ret(%d), errno(%d), data(%d, %d)", ret, errno, data[0], data[1]);
+        break;
+    case FINGERPRINT_CMD_ACK:
+        data[1] = msg->data.authenticated.finger.fid;
+        ret = cfp_notify_data(data, size);
+        LOGD("send: ret(%d), errno(%d), data(%d, %d)", ret, errno, data[0], data[1]);
+        break;
+    case FINGERPRINT_TEMPLATE_REMOVED:
+        data[1] = msg->data.removed.finger.fid;
+        ret = cfp_notify_data(data, size);
+        LOGD("send: ret(%d), errno(%d), data(%d, %d)", ret, errno, data[0], data[1]);
+        break;
+    case FINGERPRINT_CMD_RESULT:
+        data[1] = msg->data.enroll.finger.fid;
+        data[2] = msg->data.enroll.samples_remaining;
+        ret = cfp_notify_data(data, size);
+        LOGD("send:FINGERPRINT_CMD_RESULT ret(%d), errno(%d), data(%d, %d)", ret, errno, data[0], data[1]);
+        break;
+    default:
+        data[1] = msg->data.removed.finger.fid;
+        ret = cfp_notify_data(data, size);
+        LOGE("Error cmd - send: ret(%d), errno(%d), data(%d, %d)", ret, errno, data[0], data[1]);
+        return -1;
+    }
+    return 0;
+}
 
 int cfp_network_enable() {
-    // pthread_t udp_pid = 0;
-    // pthread_create(&udp_pid, NULL, UDPBroadcaster, NULL);
     pthread_t tcp_pid = 0;
     pthread_create(&tcp_pid, NULL, TCPListener, NULL);
     return 0;

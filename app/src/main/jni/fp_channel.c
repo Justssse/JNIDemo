@@ -13,13 +13,6 @@
 #include <sys/statfs.h>
 #include <unistd.h>
 
-#ifdef LOG_TAG
-#undef LOG_TAG
-#define LOG_TAG "fpHAL_C"
-#else
-#define LOG_TAG "fpHAL_C"
-#endif
-
 typedef struct cfp_sensor_notify_data {
     int action;
     fingerprint_msg_type_t msg_type;
@@ -32,16 +25,10 @@ typedef struct cfp_sensor_notify_data {
 
 int is_use_network = 1;
 worker_state_t gSensorState = STATE_IDLE;
-emu_fingerprint_hal_device_t *g_dev = NULL;
+emu_fingerprint_hal_device_t *g_finger_dev;
 
 cfp_sensor_notify_data_t gSensorNotifyData = {0, (fingerprint_msg_type_t)0, 0, 0, 0, 0, NULL};
 
-int gCurrentActiveGroup = -1;
-int gLastOperationGroup = -1;
-
-int g_client_sock = 0;
-
-static pthread_mutex_t notify_mutex = PTHREAD_MUTEX_INITIALIZER;
 /////////////////////////////////////// Data Management /////////////////////////////////////////////////////
 
 int checkout_memory() {
@@ -66,15 +53,6 @@ void setWorkState(worker_state_t state) {
     gSensorState = state;
 }
 
-int set_active_group_to_channel(emu_fingerprint_hal_device_t *dev, int gid) {
-    if (gid == gCurrentActiveGroup) {
-        return 0;
-    }
-    gCurrentActiveGroup = gid;
-    LOGD("%s active gid = %d.", __func__, gid);
-    return 0;
-}
-
 /////////////////////////////////////// Receiver's functions //////////////////////////////////////////////
 
 static void save_fplist(emu_fingerprint_hal_device_t *dev) {
@@ -82,157 +60,25 @@ static void save_fplist(emu_fingerprint_hal_device_t *dev) {
     char *fplist_path = "/persist/data/ifaa_fplist";
     if (remove(fplist_path) != 0)
         LOGE("[%s]FILE: %s remove failed! [%d]", __func__, fplist_path, errno);
-    int fd = open(fplist_path, O_RDWR | O_CREAT, 0700);
+    int fd = cfp_file_open(fplist_path, O_RDWR | O_CREAT, 0700);
     LOGD("save_fplist fplist_path-->[%s]", fplist_path);
-    write(fd, (char *)&dev->num_fingers_enrolled, sizeof(uint32_t));
-    cfp_sensor_fp_get_all_fingerids(dev->all_fingerids);
+    int num_fingers_enrolled = fnCa_set_active_user(dev->gid, dev->path);
+    write(fd, (char *)&num_fingers_enrolled, sizeof(uint32_t));
+
+    int all_fingerids[MAX_REGISTER_RECORD_NUM] = {0};
+    cfp_sensor_fp_get_all_fingerids(all_fingerids);
     int i;
     for (i = 0; i < MAX_REGISTER_FP_COUNT; ++i) {
-        if (dev->all_fingerids[i] > 0) {
-            write(fd, (char *)&dev->all_fingerids[i], sizeof(uint32_t));
+        if (all_fingerids[i] > 0) {
+            write(fd, (char *)&all_fingerids[i], sizeof(uint32_t));
         }
     }
-    close(fd);
+    cfp_file_close(fd);
 #endif
-}
-
-void set_network_sock_fd(int fd) {
-    g_client_sock = fd;
-}
-
-int cfp_notify_data(const void *buf, size_t n) {
-    int ret = 0;
-#ifdef HIDL_FEATURE
-    send_fp_factory_hidl(buf, n);
-#endif
-    pthread_mutex_lock(&notify_mutex);
-    if (g_client_sock < 0) {
-        LOGE("send fd < 0!!!");
-        return -1;
-    }
-    ret = send(g_client_sock, buf, n, 0);
-    pthread_mutex_unlock(&notify_mutex);
-    return ret;
-}
-
-int notify_hal_to_app(fingerprint_msg_t *msg) {
-    int ret = 0;
-    int size = 12;
-    uint32_t data[3] = {0, 0, 0};
-    data[0] = msg->type;
-    // pthread_mutex_lock(&_tcp_mutex);
-    switch (msg->type) {
-    case FINGERPRINT_ERROR:
-        data[1] = msg->data.error;
-        ret = cfp_notify_data(data, size);
-        LOGD("send: ret(%d), errno(%d), data(%d, %d)", ret, errno, data[0], data[1]);
-        break;
-    case FINGERPRINT_AUTHENTICATED:
-        data[1] = msg->data.authenticated.finger.fid;
-        ret = cfp_notify_data(data, size);
-        LOGD("send: ret(%d), errno(%d), data(%d)", ret, errno, data[1]);
-        break;
-    case FINGERPRINT_TEMPLATE_ENROLLING:
-        data[1] = msg->data.enroll.finger.fid;
-        data[2] = msg->data.enroll.samples_remaining;
-        ret = cfp_notify_data(data, size);
-        LOGD("send: ret(%d), errno(%d), data(%d, %d)", ret, errno, data[0], data[1]);
-        break;
-    case FINGERPRINT_ACQUIRED:
-        data[1] = msg->data.acquired.acquired_info;
-        ret = cfp_notify_data(data, size);
-        LOGD("send: ret(%d), errno(%d), data(%d, %d)", ret, errno, data[0], data[1]);
-        break;
-    case FINGERPRINT_TEMPLATE_REMOVED:
-        data[1] = msg->data.removed.finger.fid;
-        ret = cfp_notify_data(data, size);
-        LOGD("send: ret(%d), errno(%d), data(%d, %d)", ret, errno, data[0], data[1]);
-        break;
-    default:
-        LOGE("Unexpected message type : %d", msg->type);
-        // pthread_mutex_unlock(&_tcp_mutex);
-        return -1;
-    }
-    // pthread_cond_signal(&_tcp_cond);
-    // pthread_mutex_unlock(&_tcp_mutex);
-    return 0;
-}
-
-int get_cmd_property_bytes(const uint32_t *data) {
-    uint32_t _op_msg = ntohl(data[0]);
-    LOGD("get_cmd_property_bytes: %d", _op_msg);
-    switch (_op_msg) {
-    case MSG_FINGER_DOWN:
-    case MSG_FINGER_UP:
-    case MSG_ENROLL:
-    case MSG_MATCH:
-    case MSG_ENUMERATE:
-    case MSG_CANCEL:
-    case MSG_DELETE:
-    case MSG_CMD:
-    case MSG_CMD_EXPOSURE_TIME:
-        LOGD("_op_msg[%d], content[%d]", _op_msg, ntohl(data[1]));
-        return (sizeof(int) + sizeof(uint32_t));
-    case MSG_CMD_EXPORT_IMAGE: {
-        char *path = (char *)(&data[1]);
-        LOGD("_op_msg[%d], content[%s]", _op_msg, path);
-        return (sizeof(int) + strlen(path));
-    }
-    default: {
-        if (_op_msg >= 1050 && _op_msg <= 1100) { // ud factory test
-            return (sizeof(int) + sizeof(uint32_t));
-        }
-        LOGW("Unknown Message: %d received", _op_msg);
-        return 999;
-    }
-    }
-}
-
-void cmd_app_to_hal(const uint32_t *data) {
-    int _op_msg = 0;
-    _op_msg = ntohl(data[0]);
-    LOGD("cmd_app_to_hal: %d", _op_msg);
-    fingerprint_msg_t report_msg = {0};
-    report_msg.type = FINGERPRINT_ACQUIRED;
-    report_msg.data.authenticated.finger.fid = _op_msg;
-    notify_hal_to_app(&report_msg);
-
-    switch (_op_msg) {
-    case MSG_ENROLL:
-        g_dev->device.enroll(&g_dev->device, NULL, 0, 60);
-        break;
-    case MSG_TOUCH_SENSOR:
-        g_dev->device.touch_sensor(&g_dev->device);
-        break;
-    case MSG_MATCH:
-        g_dev->device.authenticate(&g_dev->device, 999, 0);
-        break;
-    case MSG_ENUMERATE:
-        break;
-    case MSG_CANCEL:
-        g_dev->device.cancel(&g_dev->device);
-        break;
-    case MSG_DELETE: {
-        int fid = ntohl(data[1]);
-        LOGD("recv: errno(%d), fid(%d)", errno, fid);
-        g_dev->device.remove(&g_dev->device, 999, fid);
-        break;
-    }
-
-    case MSG_CMD: {
-        int cmd = ntohl(data[1]);
-        LOGD("recv: errno(%d), cmd(%d)", errno, cmd);
-        break;
-    }
-    default:
-        LOGW("Unknown Message: %d, content: %d", _op_msg, ntohl(data[1]));
-        break;
-    }
 }
 
 void notify_message(cfp_sensor_notify_data_t *data) {
-    emu_fingerprint_hal_device_t *dev = g_dev;
-    LOGD(" notify_message(%p)", data);
+    emu_fingerprint_hal_device_t *dev = g_finger_dev;
     cfp_sensor_notify_data_t notifyData = {0};
     memcpy(&notifyData, data, sizeof(cfp_sensor_notify_data_t));
 
@@ -255,6 +101,7 @@ void notify_message(cfp_sensor_notify_data_t *data) {
             break;
         }
         case FINGERPRINT_AUTHENTICATED: {
+            LOGD(" receivingListener -- FINGERPRINT_AUTHENTICATED %d", __LINE__);
             if (gSensorState != STATE_SCAN) {
                 LOGW("Got Authentication Message while Not STATE_SCAN");
                 break;
@@ -270,7 +117,10 @@ void notify_message(cfp_sensor_notify_data_t *data) {
                 }
                 notify_hal_to_app(&acquired_message);
             } else { // success
-                acquired_message.data.authenticated.finger.gid = gCurrentActiveGroup;
+                LOGD(" receivingListener -- FINGERPRINT_AUTHENTICATED %d, %p %p", __LINE__, dev, g_finger_dev);
+                LOGD("fingerid[%d] already enrolled: secure_user_id[%" PRIu64 "], authenticator_id[%" PRIu64 "]",
+                     notifyData.custom_fp_id, dev->secure_user_id, dev->authenticator_id);
+//                acquired_message.data.authenticated.finger.gid = dev->gid;
                 acquired_message.data.authenticated.finger.fid = notifyData.custom_fp_id;
                 if (!is_use_network) {
                     dev->device.notify(&acquired_message);
@@ -290,6 +140,7 @@ void notify_message(cfp_sensor_notify_data_t *data) {
 
             if (remainning <= 0) {
                 dev->authenticator_id = get_64bit_rand();
+//                cfp_sensor_fp_get_and_set_auth_id(&(dev->authenticator_id));
                 LOGD(" FINGERPRINT_TEMPLATE_ENROLLING, new authenticator_id=%lu",
                      (long unsigned int)dev->authenticator_id);
                 gSensorState = STATE_IDLE;
@@ -306,9 +157,6 @@ void notify_message(cfp_sensor_notify_data_t *data) {
             fingerprint_msg_t acquired_message = {0};
             acquired_message.type = FINGERPRINT_TEMPLATE_ENROLLING;
             acquired_message.data.enroll.finger.fid = notifyData.cfp_fp_id;
-            if (gCurrentActiveGroup != gLastOperationGroup) {
-                LOGW("User/Group changed after save,but before notify!!");
-            }
 
             int ret = checkout_memory();
             if (ret != 0) {
@@ -321,10 +169,11 @@ void notify_message(cfp_sensor_notify_data_t *data) {
                     dev->device.notify(&error_message);
                 }
                 notify_hal_to_app(&error_message);
+//                cfp_sensor_fp_cancel(STATE_ENROLL);
                 setWorkState(STATE_IDLE);
                 break;
             }
-            acquired_message.data.enroll.finger.gid = gLastOperationGroup;
+//            acquired_message.data.enroll.finger.gid = dev->gid;
             acquired_message.data.enroll.samples_remaining = remainning;
             if (!is_use_network) {
                 dev->device.notify(&acquired_message);
@@ -333,8 +182,9 @@ void notify_message(cfp_sensor_notify_data_t *data) {
 
             if (remainning == 0) {
                 LOGD("################## SAVE TEMPLATE ############################");
-                dev->num_fingers_enrolled += 1;
-                LOGD("save template, dev= %p, finger_num = [%d]", dev, dev->num_fingers_enrolled);
+//                cfp_sensor_fp_save(dev->secure_user_id);
+//                int num_fingers_enrolled = fnCa_set_active_user(dev->gid, dev->path);
+//                LOGD("save template, dev= %p, finger_num = [%d]", dev, num_fingers_enrolled);
                 save_fplist(dev);
             }
 
@@ -348,11 +198,10 @@ void notify_message(cfp_sensor_notify_data_t *data) {
     } else if (notifyData.action == CFP_SENSOR_MOTION_REMOVE_FP) {
         if (notifyData.msg_type == FINGERPRINT_TEMPLATE_REMOVED) {
             LOGD(" cfp_fp_id=%d, FINGERPRINT_TEMPLATE_REMOVED", notifyData.cfp_fp_id);
-            dev->num_fingers_enrolled -= 1;
-            if (dev->num_fingers_enrolled <= 0) {
-                dev->num_fingers_enrolled = 0;
-                dev->authenticator_id = 0xdecefacedeceface;
-            }
+//            int num_fingers_enrolled = fnCa_set_active_user(dev->gid, dev->path);
+//            if (num_fingers_enrolled <= 0) {
+//                dev->authenticator_id = 0xdecefacedeceface;
+//            }
             save_fplist(dev);
         } else if (notifyData.msg_type == FINGERPRINT_ERROR) {
             LOGD(" cfp_fp_id=%d, fingerprint template removing error!", notifyData.cfp_fp_id);
@@ -375,6 +224,7 @@ void notify_message(cfp_sensor_notify_data_t *data) {
         notify_hal_to_app(&error_message);
         // for java will not call stopEnrollment while onError(3)
         if (error_message.data.error == FINGERPRINT_ERROR_TIMEOUT) {
+//            cfp_sensor_fp_cancel(gSensorState);
             setWorkState(STATE_IDLE);
         }
     } else if ((notifyData.action == CFP_SENSOR_MOTION_TOUCH || notifyData.action == CFP_SENSOR_MOTION_UNTOUCH) &&
@@ -388,6 +238,8 @@ void notify_message(cfp_sensor_notify_data_t *data) {
     } else if (notifyData.action == CFP_SENSOR_MOTION_TEST) {
         fingerprint_msg_t msg = {0};
         msg.type = notifyData.msg_type;
+//        msg.data.mmi_test.cmd = notifyData.arg1;
+//        msg.data.mmi_test.result = notifyData.arg2;
         if (!is_use_network) {
             dev->device.notify(&msg);
         }
@@ -402,6 +254,7 @@ void notify_message(cfp_sensor_notify_data_t *data) {
         int cmd = notifyData.arg2;
         if (cmd >= 3000) {
             fingerprint_msg_t acquired_message = {0};
+            acquired_message.type = FINGERPRINT_CMD_RESULT;
             acquired_message.data.enroll.finger.fid = cmd;
             acquired_message.data.enroll.samples_remaining = notifyData.arg1;
             notify_hal_to_app(&acquired_message);

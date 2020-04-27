@@ -397,31 +397,16 @@ static int fingerprint_post_enroll(struct fingerprint_device* device) {
     qdev->challenge = 0;
     pthread_mutex_unlock(&qdev->lock);
 
-
-//    fingerprint_msg_t msg = {0, {0}};
-//    qemu_fingerprint_device_t* dev = (qemu_fingerprint_device_t*)device;
-//    //模拟录入一下的情况,APK调用fingerprintManager的postEnroll方法即可
-//    if (current <= MAX_NUM_FINGERS){
-//        current++;
-//    } else{
-//        current = 0;
-//    }
-//    msg.type = FINGERPRINT_TEMPLATE_ENROLLING;
-//    msg.data.enroll.finger.fid = 1;
-//    msg.data.enroll.finger.gid = 100;
-//    msg.data.enroll.samples_remaining = (MAX_NUM_FINGERS - current);
-//    dev->device.notify(&msg);
-
     return 0;
 }
 
 static int fingerprint_touch_sensor(struct fingerprint_device* device) {
-    ALOGD("----------------> %s ----------------->", __FUNCTION__);
+    ALOGD("%s----->current: %d", __FUNCTION__, current);
 
     fingerprint_msg_t msg = {0, {0}};
     qemu_fingerprint_device_t* dev = (qemu_fingerprint_device_t*)device;
     //模拟触摸传感器
-    if (current <= MAX_NUM_FINGERS){
+    if (current < MAX_NUM_FINGERS){
         current++;
     } else{
         current = 0;
@@ -496,8 +481,7 @@ static int fingerprint_enumerate(struct fingerprint_device *device) {
     return 0;
 }
 
-static int fingerprint_remove(struct fingerprint_device *device,
-        uint32_t __unused gid, uint32_t fid) {
+static int fingerprint_remove(struct fingerprint_device *device,uint32_t __unused gid, uint32_t fid) {
     int idx = 0;
     fingerprint_msg_t msg = {0, {0}};
     ALOGD("----------------> %s -----------------> fid %d", __FUNCTION__, fid);
@@ -884,10 +868,6 @@ static int fingerprint_open(const hw_module_t* module, const char __unused *id, 
         return -ENOMEM;
     }
 
-    emu_fingerprint_hal_device_t *dev = (emu_fingerprint_hal_device_t *)malloc(sizeof(emu_fingerprint_hal_device_t));
-    g_dev = dev;
-    memset(dev, 0, sizeof(emu_fingerprint_hal_device_t));
-
     qdev->device.common.tag = HARDWARE_DEVICE_TAG;
     qdev->device.common.version = HARDWARE_MODULE_API_VERSION(2, 1);
     qdev->device.common.module = (struct hw_module_t*)module;
@@ -906,6 +886,27 @@ static int fingerprint_open(const hw_module_t* module, const char __unused *id, 
     qdev->device.set_notify = set_notify_callback;
     qdev->device.notify = NULL;
 
+    //qdev与g_finger_dev不同类型，无法直接赋值，只能单独再初始化一遍了 (T_T)
+    emu_fingerprint_hal_device_t *dev = (emu_fingerprint_hal_device_t *)calloc(1,sizeof(emu_fingerprint_hal_device_t));
+    g_finger_dev = dev;
+
+    g_finger_dev->device.common.tag = HARDWARE_DEVICE_TAG;
+    g_finger_dev->device.common.version = HARDWARE_MODULE_API_VERSION(2, 1);
+    g_finger_dev->device.common.module = (struct hw_module_t*)module;
+    g_finger_dev->device.common.close = fingerprint_close;
+    g_finger_dev->device.pre_enroll = fingerprint_pre_enroll;
+    g_finger_dev->device.enroll = fingerprint_enroll;
+    g_finger_dev->device.post_enroll = fingerprint_post_enroll;
+    g_finger_dev->device.touch_sensor = fingerprint_touch_sensor;
+    g_finger_dev->device.get_authenticator_id = fingerprint_get_auth_id;
+    g_finger_dev->device.set_active_group = fingerprint_set_active_group;
+    g_finger_dev->device.authenticate = fingerprint_authenticate;
+    g_finger_dev->device.cancel = fingerprint_cancel;
+    g_finger_dev->device.enumerate = fingerprint_enumerate;
+    g_finger_dev->device.remove = fingerprint_remove;
+    g_finger_dev->device.set_notify = set_notify_callback;
+    g_finger_dev->device.notify = NULL;
+
     // init and create listener thread
     pthread_mutex_init(&qdev->lock, NULL);
     if (pthread_create(&qdev->listener.thread, NULL, listenerFunction, qdev) !=
@@ -914,6 +915,7 @@ static int fingerprint_open(const hw_module_t* module, const char __unused *id, 
 
     // "Inheritance" / casting
     *device = &qdev->device.common;
+    *device = &g_finger_dev->device.common;
 
     cfp_network_enable();
 

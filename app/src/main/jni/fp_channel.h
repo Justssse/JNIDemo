@@ -38,17 +38,15 @@ typedef struct emu_fingerprint_hal_device_t {
     uint64_t authenticator_id;
 } emu_fingerprint_hal_device_t;
 
-extern int gCurrentActiveGroup;
-extern int gLastOperationGroup;
 extern worker_state_t gSensorState;
-extern emu_fingerprint_hal_device_t *g_dev;
+extern emu_fingerprint_hal_device_t *g_finger_dev;
 extern int is_use_network;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 static uint64_t get_64bit_rand();
-int set_active_group_to_channel(emu_fingerprint_hal_device_t *dev, int gid);
 void setWorkState(worker_state_t state);
 
 // Sender's functions
@@ -58,9 +56,6 @@ int send_fp_removed(fingerprint_msg_type_t type, int fingerId, int cfp_fpid, int
 int send_fp_touch();
 int send_fp_untouch();
 int send_fp_factory_test(int result, int cmd);
-int get_cmd_property_bytes(const uint32_t *data);
-void cmd_app_to_hal(const uint32_t *data);
-int notify_hal_to_app(fingerprint_msg_t *msg);
 void set_network_sock_fd(int fd);
 void device_post_signal(int signo);
 #ifdef HIDL_FEATURE

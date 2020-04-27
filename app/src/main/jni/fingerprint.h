@@ -33,6 +33,8 @@ typedef enum fingerprint_msg_type {
     FINGERPRINT_TEMPLATE_REMOVED = 4,
     FINGERPRINT_AUTHENTICATED = 5,
     FINGERPRINT_TEMPLATE_ENUMERATING = 6,
+    FINGERPRINT_CMD_ACK = 9,
+    FINGERPRINT_CMD_RESULT = 10
 } fingerprint_msg_type_t;
 
 /*
