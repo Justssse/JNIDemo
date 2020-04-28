@@ -27,9 +27,29 @@ enum {
     MSG_CMD_RESET_ALGO_PARAMETERS = 0x217,
 };
 
+typedef enum worker_state_t {
+    STATE_ENROLL = 0,
+    STATE_SCAN,
+    STATE_IDLE,
+    STATE_EXIT
+} worker_state_t;
+
+typedef struct emu_fingerprint_hal_device_t {
+    fingerprint_device_t device; // inheritance
+    int all_fingerids[5];
+    volatile int num_fingers_enrolled;
+    uint64_t challenge;
+    uint64_t secure_user_id;
+    uint64_t user_id;
+    uint64_t authenticator_id;
+} emu_fingerprint_hal_device_t;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+extern fingerprint_device_t *sys_hal_device;
+extern emu_fingerprint_hal_device_t *g_finger_dev;
+extern int is_use_network;
 
 void cmd_app_to_hal(const uint32_t *data);
 int cfp_notify_data(const void *buf, size_t n);

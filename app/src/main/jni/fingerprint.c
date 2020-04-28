@@ -34,20 +34,18 @@
 #include <string.h>
 #include <android/log.h>
 #include <stdbool.h>
-
-#include "fingerprint.h"
-#include "hardware.h"
-#include "qemud.h"
-#include "mylog.h"
-#include "fp_channel.h"
-#include "fp_network.h"
-
 #include <poll.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <jni.h>
 #include <syslog.h>
 #include <stdlib.h>
+
+#include "fingerprint.h"
+#include "hardware.h"
+#include "qemud.h"
+#include "mylog.h"
+#include "fp_network.h"
 
 #define ALOGV(...) __android_log_print(ANDROID_LOG_VERBOSE, LOG_TAG, __VA_ARGS__);
 #define ALOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__);
@@ -114,34 +112,29 @@ static void saveFingerprint(worker_thread_t* listener, int idx) {
     // Save fingerprints to file
     FILE* fp = openForWrite(listener->fp_filename);
     if (fp == NULL) {
-        ALOGE("Could not open fingerprints storage at %s; "
-              "fingerprints won't be saved",
-              listener->fp_filename);
+        ALOGE("Could not open fingerprints storage at %s; ""fingerprints won't be saved",listener->fp_filename);
         perror("Failed to open file");
         return;
     }
 
-    ALOGD("Write fingerprint[%d] (0x%" PRIx64 ",0x%" PRIx64 ")", idx,
-          listener->secureid[idx], listener->fingerid[idx]);
+    ALOGD("Write fingerprint[%d] (0x%" PRIx64 ",0x%" PRIx64 ")", idx,listener->secureid[idx], listener->fingerid[idx]);
 
     if (fseek(fp, (idx) * sizeof(uint64_t), SEEK_SET) < 0) {
-        ALOGE("Failed while seeking for fingerprint[%d] in emulator storage",
-              idx);
+        ALOGE("Failed while seeking for fingerprint[%d] in emulator storage", idx);
         fclose(fp);
         return;
     }
     int ns = fwrite(&listener->secureid[idx], sizeof(uint64_t), 1, fp);
 
     if (fseek(fp, (MAX_NUM_FINGERS + idx) * sizeof(uint64_t), SEEK_SET) < 0) {
-        ALOGE("Failed while seeking for fingerprint[%d] in emulator storage",
-              idx);
+        ALOGE("Failed while seeking for fingerprint[%d] in emulator storage", idx);
         fclose(fp);
         return;
     }
     int nf = fwrite(&listener->fingerid[idx], sizeof(uint64_t), 1, fp);
-    if (ns != 1 || ns !=1)
-        ALOGW("Corrupt emulator fingerprints storage; could not save "
-              "fingerprints");
+    if (ns != 1){
+        ALOGW("Corrupt emulator fingerprints storage; could not save fingerprints");
+    }
 
     fclose(fp);
 
@@ -193,9 +186,7 @@ static void loadAuthenticatorId(const char* authid_filename, uint64_t* pauthenid
     ALOGD("----------------> %s ----------------->", __FUNCTION__);
     FILE* fp = fopen(authid_filename, "r");
     if (fp == NULL) {
-        ALOGE("Could not load authenticator id from storage at %s; "
-              "it has not yet been created.",
-              authid_filename);
+        ALOGE("Could not load authenticator id from storage at %s, it has not yet been created.",authid_filename);
         perror("Failed to open/create file");
         return;
     }
@@ -203,8 +194,9 @@ static void loadAuthenticatorId(const char* authid_filename, uint64_t* pauthenid
     rewind(fp);
 
     int na = fread(pauthenid, sizeof(*pauthenid), 1, fp);
-    if (na != 1)
+    if (na != 1){
         ALOGW("Corrupt emulator authenticator id storage (read %d)", na);
+    }
 
     ALOGD("Read authenticator id (0x%" PRIx64 ")", *pauthenid);
 
@@ -217,24 +209,21 @@ static void loadFingerprints(worker_thread_t* listener) {
     ALOGD("----------------> %s ----------------->", __FUNCTION__);
     FILE* fp = fopen(listener->fp_filename, "r");
     if (fp == NULL) {
-        ALOGE("Could not load fingerprints from storage at %s; "
-              "it has not yet been created.",
-              listener->fp_filename);
+        ALOGE("Could not load fingerprints from storage at %s; it has not yet been created.", listener->fp_filename);
         perror("Failed to open/create file");
         return;
     }
 
-    int ns = fread(listener->secureid, MAX_NUM_FINGERS * sizeof(uint64_t), 1,
-                   fp);
-    int nf = fread(listener->fingerid, MAX_NUM_FINGERS * sizeof(uint64_t), 1,
-                   fp);
-    if (ns != 1 || nf != 1)
+    int ns = fread(listener->secureid, MAX_NUM_FINGERS * sizeof(uint64_t), 1, fp);
+    int nf = fread(listener->fingerid, MAX_NUM_FINGERS * sizeof(uint64_t), 1, fp);
+    if (ns != 1 || nf != 1){
         ALOGW("Corrupt emulator fingerprints storage (read %d+%db)", ns, nf);
+    }
 
     int i = 0;
-    for (i = 0; i < MAX_NUM_FINGERS; i++)
-        ALOGD("Read fingerprint %d (0x%" PRIx64 ",0x%" PRIx64 ")", i,
-              listener->secureid[i], listener->fingerid[i]);
+    for (i = 0; i < MAX_NUM_FINGERS; i++){
+        ALOGD("Read fingerprint %d (0x%" PRIx64 ",0x%" PRIx64 ")", i, listener->secureid[i], listener->fingerid[i]);
+    }
 
     fclose(fp);
 
@@ -257,7 +246,6 @@ static uint64_t fingerprint_get_auth_id(struct fingerprint_device* device) {
     // was created.  Though this isn't expected to be secret, it is reasonable to expect it to be
     // cryptographically generated to avoid replay attacks.
     qemu_fingerprint_device_t* qdev = (qemu_fingerprint_device_t*)device;
-    ALOGD("----------------> %s ----------------->", __FUNCTION__);
     uint64_t authenticator_id = 0;
     pthread_mutex_lock(&qdev->lock);
     authenticator_id = qdev->authenticator_id;
@@ -267,16 +255,16 @@ static uint64_t fingerprint_get_auth_id(struct fingerprint_device* device) {
     return authenticator_id;
 }
 
-static int fingerprint_set_active_group(struct fingerprint_device *device, uint32_t gid,
-        const char *path) {
+static int fingerprint_set_active_group(struct fingerprint_device *device, uint32_t gid, const char *path) {
     ALOGD("----------------> %s -----------------> path %s", __FUNCTION__, path);
+    if (path == NULL){
+        path = "data/system/users/0/fpdata";
+    }
     qemu_fingerprint_device_t* qdev = (qemu_fingerprint_device_t*)device;
     pthread_mutex_lock(&qdev->lock);
     qdev->group_id = gid;
-    snprintf(qdev->listener.fp_filename, sizeof(qdev->listener.fp_filename),
-            "%s/%s", path, FINGERPRINT_FILENAME);
-    snprintf(qdev->listener.authid_filename, sizeof(qdev->listener.authid_filename),
-            "%s/%s", path, AUTHENTICATOR_ID_FILENAME);
+    snprintf(qdev->listener.fp_filename, sizeof(qdev->listener.fp_filename), "%s/%s", path, FINGERPRINT_FILENAME);
+    snprintf(qdev->listener.authid_filename, sizeof(qdev->listener.authid_filename), "%s/%s", path, AUTHENTICATOR_ID_FILENAME);
     uint64_t authenticator_id = 0;
     loadFingerprints(&qdev->listener);
     loadAuthenticatorId(qdev->listener.authid_filename, &authenticator_id);
@@ -299,8 +287,7 @@ static int fingerprint_set_active_group(struct fingerprint_device *device, uint3
  * Actual authentication must happen in TEE and should be monitored in a separate thread
  * since this function is expected to return immediately.
  */
-static int fingerprint_authenticate(struct fingerprint_device *device,
-    uint64_t operation_id, __unused uint32_t gid)
+static int fingerprint_authenticate(struct fingerprint_device *device, uint64_t operation_id, __unused uint32_t gid)
 {
     qemu_fingerprint_device_t* qdev = (qemu_fingerprint_device_t*)device;
 
@@ -321,10 +308,8 @@ static int fingerprint_authenticate(struct fingerprint_device *device,
  *
  * Note: As with fingerprint_authenticate(), this would run in TEE on a real device.
  */
-static int fingerprint_enroll(struct fingerprint_device *device,
-        const hw_auth_token_t *hat,
-        uint32_t __unused gid,
-        uint32_t __unused timeout_sec) {
+static int fingerprint_enroll(struct fingerprint_device *device, const hw_auth_token_t *hat,
+        uint32_t __unused gid, uint32_t __unused timeout_sec) {
     fingerprint_msg_t msg = {0, {0}};
     msg.type = FINGERPRINT_ERROR;
     msg.data.error = FINGERPRINT_ERROR_UNABLE_TO_PROCESS;
@@ -357,6 +342,7 @@ static int fingerprint_enroll(struct fingerprint_device *device,
 
     pthread_mutex_lock(&dev->lock);
     dev->listener.state = STATE_ENROLL;
+    current = 0;
     pthread_mutex_unlock(&dev->lock);
 
     // fingerprint id, authenticator id, and secure_user_id
@@ -384,7 +370,12 @@ static uint64_t fingerprint_pre_enroll(struct fingerprint_device *device) {
 
     pthread_mutex_lock(&qdev->lock);
     qdev->challenge = challenge;
+    current = 0;
     pthread_mutex_unlock(&qdev->lock);
+
+    for (int idx = 0; idx < MAX_NUM_FINGERS; idx++) {
+        LOGD("fingerprint[%d]  state:%d  fid:%d  filename:%d",idx ,qdev->listener.state, qdev->listener.fingerid[idx], qdev->listener.fp_filename[idx]);
+    }
 
     return challenge;
 }
@@ -395,6 +386,7 @@ static int fingerprint_post_enroll(struct fingerprint_device* device) {
 
     pthread_mutex_lock(&qdev->lock);
     qdev->challenge = 0;
+    current = 0;
     pthread_mutex_unlock(&qdev->lock);
 
     return 0;
@@ -486,9 +478,7 @@ static int fingerprint_remove(struct fingerprint_device *device,uint32_t __unuse
     fingerprint_msg_t msg = {0, {0}};
     ALOGD("----------------> %s -----------------> fid %d", __FUNCTION__, fid);
     if (device == NULL) {
-        ALOGE("Can't remove fingerprint (gid=%d, fid=%d); "
-              "device not initialized properly",
-              gid, fid);
+        ALOGE("Can't remove fingerprint (gid=%d, fid=%d); ""device not initialized properly",gid, fid);
         return -ENODEV;
     }
 
@@ -504,6 +494,7 @@ static int fingerprint_remove(struct fingerprint_device *device,uint32_t __unuse
             listIsEmpty = true;  // Haven't seen a valid entry yet
             for (idx = 0; idx < MAX_NUM_FINGERS; idx++) {
                 uint32_t theFid = qdev->listener.fingerid[idx];
+                LOGD("state:%d   fid:%d  filename:%d",qdev->listener.state, qdev->listener.fingerid[idx], qdev->listener.fp_filename[idx]);
                 if (theFid != 0) {
                     // Delete this entry
                     qdev->listener.secureid[idx] = 0;
@@ -536,6 +527,7 @@ static int fingerprint_remove(struct fingerprint_device *device,uint32_t __unuse
         // Look for this finger ID in our table.
         pthread_mutex_lock(&qdev->lock);
         for (idx = 0; idx < MAX_NUM_FINGERS; idx++) {
+            LOGD("state:%d   fid:%d  filename:%d",qdev->listener.state, qdev->listener.fingerid[idx], qdev->listener.fp_filename[idx]);
             if (qdev->listener.fingerid[idx] == fid &&
                 qdev->listener.secureid[idx] != 0) {
                 // Found it!
@@ -572,12 +564,10 @@ static int fingerprint_remove(struct fingerprint_device *device,uint32_t __unuse
     return 0;
 }
 
-static int set_notify_callback(struct fingerprint_device *device,
-                               fingerprint_notify_t notify) {
+static int set_notify_callback(struct fingerprint_device *device, fingerprint_notify_t notify) {
     ALOGD("----------------> %s ----------------->", __FUNCTION__);
     if (device == NULL || notify == NULL) {
-        ALOGE("Failed to set notify callback @ %p for fingerprint device %p",
-              device, notify);
+        ALOGE("Failed to set notify callback @ %p for fingerprint device %p", device, notify);
         return -1;
     }
 
@@ -798,15 +788,10 @@ static void* listenerFunction(void* data) {
                             send_scan_notice(qdev, fid);
                             break;
                         default:
-                            ALOGE("fingerprint event listener at unexpected "
-                                  "state 0%x",
-                                  qdev->listener.state);
+                            ALOGE("fingerprint event listener at unexpected state 0%x", qdev->listener.state);
                     }
                 } else {
-                    ALOGE("fingerprintid %d not in valid range [%d, %d] and "
-                          "will be "
-                          "ignored",
-                          fid, 1, MAX_FID_VALUE);
+                    ALOGE("fingerprintid %d not in valid range [%d, %d] and will be ignored", fid, 1, MAX_FID_VALUE);
                     continue;
                 }
             } else if (strncmp("off", buffer, 3) == 0) {
@@ -876,7 +861,7 @@ static int fingerprint_open(const hw_module_t* module, const char __unused *id, 
     qdev->device.pre_enroll = fingerprint_pre_enroll;
     qdev->device.enroll = fingerprint_enroll;
     qdev->device.post_enroll = fingerprint_post_enroll;
-    qdev->device.touch_sensor = fingerprint_touch_sensor;
+    qdev->device.touch_sensor = NULL;
     qdev->device.get_authenticator_id = fingerprint_get_auth_id;
     qdev->device.set_active_group = fingerprint_set_active_group;
     qdev->device.authenticate = fingerprint_authenticate;
@@ -909,9 +894,10 @@ static int fingerprint_open(const hw_module_t* module, const char __unused *id, 
 
     // init and create listener thread
     pthread_mutex_init(&qdev->lock, NULL);
-    if (pthread_create(&qdev->listener.thread, NULL, listenerFunction, qdev) !=
-        0)
+    if (pthread_create(&qdev->listener.thread, NULL, listenerFunction, qdev) != 0){
+        LOGE("listener.thread create fail !!!!!");
         return -1;
+    }
 
     // "Inheritance" / casting
     *device = &qdev->device.common;

@@ -7,6 +7,6 @@ LOCAL_LDLIBS := -llog
 LOCAL_MODULE := fingerprint.default
 
 # C++文件
-LOCAL_SRC_FILES := fingerprint.c fp_channel.c fp_network.c
+LOCAL_SRC_FILES := fingerprint.c fp_network.c
 
 include $(BUILD_SHARED_LIBRARY)

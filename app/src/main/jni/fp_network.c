@@ -1,5 +1,4 @@
 #include "fp_network.h"
-#include "fp_channel.h"
 #include "mylog.h"
 
 #include <arpa/inet.h>
@@ -13,15 +12,19 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <android/log.h>
 
 #define HAL_PATH "/system/lib64/cdfinger.fingerprint.default.so"
 #define HAL_PATH_UPDATE HAL_PATH "_update"
 // #define UDP_PORT 18930
 #define TCP_PORT 18938 // 18928 + 10
 #define BACKLOG 100
+
 int _tcp_s_sock = -1;
 int _client_sock = -1;
-fingerprint_device_t *_sys_hal_device = NULL;
+fingerprint_device_t *sys_hal_device = NULL;
+emu_fingerprint_hal_device_t *g_finger_dev;
+int is_use_network;
 
 pthread_mutex_t _tcp_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t _tcp_cond = PTHREAD_COND_INITIALIZER;
@@ -42,9 +45,8 @@ int get_cmd_property_bytes(const uint32_t *data) {
         LOGD("_op_msg[%d], buffer_size[%d]", _op_msg, buffer_size);
         return (int)(sizeof(int) * 2 + buffer_size);
     }
-    default: {
+    default:
         return (sizeof(int) * 2);
-    }
     }
 }
 
@@ -53,6 +55,7 @@ void cmd_app_to_hal(const uint32_t *data) {
     uint32_t _op_msg = data[0];
     uint32_t parameter = data[1];
     LOGD("cmd_app_to_hal device: %p, _op_msg: %d, parameter: %d", g_finger_dev, _op_msg, parameter);
+
     fingerprint_msg_t report_msg = {0};
     report_msg.type = FINGERPRINT_CMD_ACK;
     report_msg.data.authenticated.finger.fid = _op_msg;
@@ -66,7 +69,6 @@ void cmd_app_to_hal(const uint32_t *data) {
         break;
     }
     case MSG_TOUCH_SENSOR:
-        LOGD("MSG_TOUCH_SENSOR匹配成功");
         g_finger_dev->device.touch_sensor(&g_finger_dev->device);
         break;
     case MSG_MATCH:
@@ -79,7 +81,6 @@ void cmd_app_to_hal(const uint32_t *data) {
         g_finger_dev->device.cancel(&g_finger_dev->device);
         break;
     case MSG_DELETE: {
-        LOGD("recv: errno(%d), fid(%d)", errno, parameter);
         g_finger_dev->device.remove(&g_finger_dev->device, 0, parameter);
         break;
     }
@@ -106,14 +107,14 @@ int CreateTCPSocket() {
     int sock_type = SOCK_STREAM; // SOCK_DGRAM
 
     if ((tcp_sock = socket(AF_INET, sock_type, 0)) < 0) {
-        LOGE("create socket failed! %s(%d))", strerror(errno), errno);
+        LOGE("TCP create socket failed! %s(%d))", strerror(errno), errno);
         return -1;
     }
     int on = 1;
     setsockopt(tcp_sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
 
     if (bind(tcp_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        LOGE("bind socket failed! %s(%d))", strerror(errno), errno);
+        LOGE("TCP bind socket failed! %s(%d))", strerror(errno), errno);
         if (errno != EADDRINUSE) { // Address already in use(98))
             close(tcp_sock);
             return -1;
@@ -124,6 +125,7 @@ int CreateTCPSocket() {
         LOGE("listen socket failed! %s(%d))", strerror(errno), errno);
         return -1;
     }
+    LOGD("TCP CreateTCPSocket:%d", tcp_sock);
     return tcp_sock;
 }
 
@@ -131,17 +133,17 @@ static void *TCPClientWorker(void *arg) {
     // pthread_detach(pthread_self());
 #define RECV_SIZE 256
     int local_client_sock = *((int *)arg);
-    LOGD("Client[%d] worker start", local_client_sock);
+    LOGD("TCP Client[%d] worker start", local_client_sock);
     char data[RECV_SIZE] = {0};
     while (1) {
         memset(data, 0, sizeof(data));
         int rbytes = (int)recv(local_client_sock, &data, sizeof(data), 0);
         if (rbytes <= 0) {
-            LOGE("recv failed: %s, rbytes(%d)", strerror(errno), rbytes);
+            LOGE("TCP recv failed: %s, rbytes: %d", strerror(errno), rbytes);
             goto TCP_CLIENT_END;
         }
         is_use_network = 1;
-        LOGD("Client[%d] received: %d", local_client_sock, rbytes);
+        LOGD("TCP Client[%d] received: %d", local_client_sock, rbytes);
         int offset = 0;
         char *ptr = (char *)data;
         while (offset < rbytes) {
@@ -149,10 +151,10 @@ static void *TCPClientWorker(void *arg) {
             pthread_mutex_lock(&_tcp_mutex);
             int cmdSize = get_cmd_property_bytes((const uint32_t *)pMsg);
             if (cmdSize > RECV_SIZE) {
-                LOGD("current cmd size: %d", cmdSize);
+                LOGD("TCP current cmd size: %d", cmdSize);
                 char *buffer = (void *)malloc((size_t)cmdSize);
                 if (buffer == NULL) {
-                    LOGE("%s buffer is NULL, malloc size: %d", __func__, cmdSize);
+                    LOGE("TCP %s buffer is NULL, malloc size: %d", __func__, cmdSize);
                     break;
                 }
                 int ofs = 0;
@@ -163,7 +165,7 @@ static void *TCPClientWorker(void *arg) {
                 do {
                     int r = (int)recv(local_client_sock, temp_buffer, sizeof(temp_buffer), 0);
                     if (r <= 0) {
-                        LOGE("Line %d, recv failed: %s, rbytes(%d)", __LINE__, strerror(errno), r);
+                        LOGE("TCP Line %d, recv finished: %s, rbytes(%d)", __LINE__, strerror(errno), r);
                         free(buffer);
                         goto TCP_CLIENT_END;
                     }
@@ -177,11 +179,11 @@ static void *TCPClientWorker(void *arg) {
             }
             offset += cmdSize;
             pthread_mutex_unlock(&_tcp_mutex);
-            LOGD("Client[%d] offset: %d, total: %d", local_client_sock, offset, rbytes);
+            LOGD("TCP Client[%d] offset: %d, total: %d", local_client_sock, offset, rbytes);
         }
     }
 TCP_CLIENT_END:
-    LOGD("Client[%d] worker end", local_client_sock);
+    LOGD("TCP Client[%d] worker end", local_client_sock);
     is_use_network = 0;
     close(local_client_sock);
     // cfp_file_close(_tcp_s_sock);
@@ -209,13 +211,13 @@ static void *TCPListener(void *arg) {
 
         int _client_sock_temp = accept(_tcp_s_sock, (struct sockaddr *)&client_addr, &length);
         if (_client_sock_temp < 0) {
-            LOGE("accept failed: %s(%d))", strerror(errno), errno);
+            LOGE("TCP accept finished: %s(%d))", strerror(errno), errno);
             close(_tcp_s_sock);
             _tcp_s_sock = -1;
             continue;
         }
         _client_sock = _client_sock_temp;
-        LOGD("Client[%d] connected!", _client_sock_temp);
+        LOGD("TCP Client[%d] connected!", _client_sock_temp);
         pthread_t pid = 0;
         pthread_create(&pid, NULL, TCPClientWorker, &_client_sock_temp);
         usleep(1000 * 1000); // wait TCPClientWorker created
