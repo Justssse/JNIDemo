@@ -22,8 +22,7 @@
 
 int _tcp_s_sock = -1;
 int _client_sock = -1;
-fingerprint_device_t *sys_hal_device = NULL;
-emu_fingerprint_hal_device_t *g_finger_dev;
+
 int is_use_network;
 
 pthread_mutex_t _tcp_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -54,7 +53,7 @@ int get_cmd_property_bytes(const uint32_t *data) {
 void cmd_app_to_hal(const uint32_t *data) {
     uint32_t _op_msg = data[0];
     uint32_t parameter = data[1];
-    LOGD("cmd_app_to_hal device: %p, _op_msg: %d, parameter: %d", g_finger_dev, _op_msg, parameter);
+    LOGD("cmd_app_to_hal, _op_msg: %d, parameter: %d", _op_msg, parameter);
 
     fingerprint_msg_t report_msg = {0};
     report_msg.type = FINGERPRINT_CMD_ACK;
@@ -65,23 +64,23 @@ void cmd_app_to_hal(const uint32_t *data) {
     case MSG_ENROLL: {
         hw_auth_token_t hat;
         hat.version = 66;
-        g_finger_dev->device.enroll(&g_finger_dev->device, &hat, 0, 60);
+        enroll(&hat, 0, 60);
         break;
     }
     case MSG_TOUCH_SENSOR:
-        g_finger_dev->device.touch_sensor(&g_finger_dev->device);
+        touch_sensor();
         break;
     case MSG_MATCH:
-        g_finger_dev->device.authenticate(&g_finger_dev->device, 0, 0);
+        authenticate(0, 0);
         break;
     case MSG_ENUMERATE:
-        g_finger_dev->device.enumerate(&g_finger_dev->device);
+        enumerate();
         break;
     case MSG_CANCEL:
-        g_finger_dev->device.cancel(&g_finger_dev->device);
+        cancel();
         break;
     case MSG_DELETE: {
-        g_finger_dev->device.remove(&g_finger_dev->device, 0, parameter);
+        remove_fingerprint(0, parameter);
         break;
     }
     default:

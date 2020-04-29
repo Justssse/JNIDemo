@@ -176,8 +176,7 @@ typedef struct fingerprint_device {
      *                  or a negative number in case of error, generally from the errno.h set.
      *                  A notify() function may be called indicating the error condition.
      */
-    int (*enroll)(struct fingerprint_device *dev, const hw_auth_token_t *hat,
-                    uint32_t gid, uint32_t timeout_sec);
+    int (*enroll)(struct fingerprint_device *dev, const hw_auth_token_t *hat, uint32_t gid, uint32_t timeout_sec);
 
     /*
      * Finishes the enroll operation and invalidates the pre_enroll() generated challenge.
@@ -188,8 +187,6 @@ typedef struct fingerprint_device {
      *                  or a negative number in case of error, generally from the errno.h set.
      */
     int (*post_enroll)(struct fingerprint_device *dev);
-
-    int (*touch_sensor)(struct fingerprint_device *dev);
 
     /*
      * get_authenticator_id:
@@ -253,8 +250,7 @@ typedef struct fingerprint_device {
      * Function return: 0 on success
      *                  or a negative number in case of error, generally from the errno.h set.
      */
-    int (*set_active_group)(struct fingerprint_device *dev, uint32_t gid,
-                            const char *store_path);
+    int (*set_active_group)(struct fingerprint_device *dev, uint32_t gid, const char *store_path);
 
     /*
      * Authenticates an operation identifed by operation_id
@@ -277,5 +273,14 @@ typedef struct fingerprint_module {
      */
     struct hw_module_t common;
 } fingerprint_module_t;
+
+fingerprint_device_t *fingerprintDevice;
+
+int enroll(const hw_auth_token_t *hat, uint32_t gid, uint32_t timeout_sec);
+int authenticate(uint64_t operation_id, uint32_t gid);
+int touch_sensor();
+int enumerate();
+int cancel();
+int remove_fingerprint(uint32_t __unused gid, uint32_t fid);
 
 #endif  /* ANDROID_INCLUDE_HARDWARE_FINGERPRINT_H */

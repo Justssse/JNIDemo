@@ -47,8 +47,7 @@ typedef struct emu_fingerprint_hal_device_t {
 #ifdef __cplusplus
 extern "C" {
 #endif
-extern fingerprint_device_t *sys_hal_device;
-extern emu_fingerprint_hal_device_t *g_finger_dev;
+
 extern int is_use_network;
 
 void cmd_app_to_hal(const uint32_t *data);
