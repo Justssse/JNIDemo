@@ -20,6 +20,11 @@
 #include "hardware.h"
 #include "hw_auth_token.h"
 
+#ifdef HIDL_FEATURE
+#include <servers/fingerprint_hidl.h>
+#include <servers/fingerprint_hidl_service.h>
+#endif
+
 #define FINGERPRINT_MODULE_API_VERSION_1_0 HARDWARE_MODULE_API_VERSION(1, 0)
 #define FINGERPRINT_MODULE_API_VERSION_2_0 HARDWARE_MODULE_API_VERSION(2, 0)
 #define FINGERPRINT_MODULE_API_VERSION_2_1 HARDWARE_MODULE_API_VERSION(2, 1)
@@ -276,11 +281,19 @@ typedef struct fingerprint_module {
 
 fingerprint_device_t *fingerprintDevice;
 
+#ifdef HIDL_FEATURE
+finger_hal_t *fingerHal;
+#endif
+
 int enroll(const hw_auth_token_t *hat, uint32_t gid, uint32_t timeout_sec);
 int authenticate(uint64_t operation_id, uint32_t gid);
 int touch_sensor();
 int enumerate();
 int cancel();
 int remove_fingerprint(uint32_t __unused gid, uint32_t fid);
+
+#ifdef HIDL_FEATURE
+void notify_back(const unsigned char *buffer, uint32_t size);
+#endif
 
 #endif  /* ANDROID_INCLUDE_HARDWARE_FINGERPRINT_H */

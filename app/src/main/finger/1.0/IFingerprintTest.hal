@@ -1,0 +1,7 @@
+package android.hardware.finger@1.0;
+
+import IFingerprintCallback;
+ 
+interface IFingerprintTest{
+    sendMessage(vec<uint8_t> buffer, IFingerprintCallback callback);
+};

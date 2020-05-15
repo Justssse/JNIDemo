@@ -1,0 +1,5 @@
+package android.hardware.finger@1.0;
+ 
+interface IFingerprintCallback{
+	oneway onResult(vec<uint8_t> buffer);
+};

@@ -55,7 +55,7 @@ void cmd_app_to_hal(const uint32_t *data) {
     uint32_t parameter = data[1];
     LOGD("cmd_app_to_hal, _op_msg: %d, parameter: %d", _op_msg, parameter);
 
-    fingerprint_msg_t report_msg = {0};
+    fingerprint_msg_t report_msg = {0,{}};
     report_msg.type = FINGERPRINT_CMD_ACK;
     report_msg.data.authenticated.finger.fid = _op_msg;
     notify_hal_to_app(&report_msg);
@@ -226,34 +226,40 @@ static void *TCPListener(void *arg) {
 
 int cfp_notify_data(const void *buf, size_t n) {
     int ret = -1;
-    if (is_use_network) {
-        if (_client_sock < 0) {
-            LOGE("send fd < 0!!!");
-            return -1;
-        }
-        if (n < 12) {
-            LOGE("%s buffer size must >= 12 !", __func__);
-            return -1;
-        }
-        pthread_mutex_lock(&notify_mutex);
-        int sbytes = 0;
-        while (sbytes < n) {
-            if ((n - sbytes) < 1024) {
-                ret = (int)send(_client_sock, buf + sbytes, n - sbytes, 0);
-            } else {
-                ret = (int)send(_client_sock, buf + sbytes, 1024, 0);
-            }
-            if (ret >= 0) {
-                sbytes += ret;
-            } else {
-                LOGE("socket send failed: %d, errno: %d", ret, errno);
-                break;
-            }
-        }
-        LOGD("%s %d, 0x%08x, 0x%08x, 0x%08x, %zu, %d, err: %d", __func__, _client_sock, ((int *)buf)[0],
-             ((int *)buf)[1], ((int *)buf)[2], n, ret, errno);
-        pthread_mutex_unlock(&notify_mutex);
-    }
+
+    #ifdef HIDL_FEATURE
+    notify_back(buf, n);
+    #endif
+    
+//     暂时注释
+     if (is_use_network) {
+         if (_client_sock < 0) {
+             LOGE("send fd < 0!!!");
+             return -1;
+         }
+         if (n < 12) {
+             LOGE("%s buffer size must >= 12 !", __func__);
+             return -1;
+         }
+         pthread_mutex_lock(&notify_mutex);
+         int sbytes = 0;
+         while (sbytes < (int)n) {
+             if ((n - sbytes) < 1024) {
+                 ret = (int)send(_client_sock, buf + sbytes, n - sbytes, 0);
+             } else {
+                 ret = (int)send(_client_sock, buf + sbytes, 1024, 0);
+             }
+             if (ret >= 0) {
+                 sbytes += ret;
+             } else {
+                 LOGE("socket send failed: %d, errno: %d", ret, errno);
+                 break;
+             }
+         }
+         LOGD("%s %d, 0x%08x, 0x%08x, 0x%08x, %zu, %d, err: %d", __func__, _client_sock, ((int *)buf)[0],
+              ((int *)buf)[1], ((int *)buf)[2], n, ret, errno);
+         pthread_mutex_unlock(&notify_mutex);
+     }
     return ret;
 }
 

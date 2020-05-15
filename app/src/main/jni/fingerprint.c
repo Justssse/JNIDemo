@@ -381,10 +381,6 @@ static uint64_t fingerprint_pre_enroll(struct fingerprint_device *device) {
     current_step = 0;
     pthread_mutex_unlock(&qdev->lock);
 
-    for (int idx = 0; idx < MAX_NUM_FINGERS; idx++) {
-        LOGD("fingerprint[%d]  state:%d  fid:%d  filename:%d",idx ,qdev->listener.state, qdev->listener.fingerid[idx], qdev->listener.fp_filename[idx]);
-    }
-
     return challenge;
 }
 
@@ -510,7 +506,7 @@ static int fingerprint_remove(struct fingerprint_device *device,uint32_t __unuse
             listIsEmpty = true;  // Haven't seen a valid entry yet
             for (idx = 0; idx < MAX_NUM_FINGERS; idx++) {
                 uint32_t theFid = qdev->listener.fingerid[idx];
-                LOGD("state:%d   fid:%d  filename:%d",qdev->listener.state, qdev->listener.fingerid[idx], qdev->listener.fp_filename[idx]);
+                LOGD("state:%d   fid:%"PRIx64"  filename:%d",qdev->listener.state, qdev->listener.fingerid[idx], qdev->listener.fp_filename[idx]);
                 if (theFid != 0) {
                     // Delete this entry
                     qdev->listener.secureid[idx] = 0;
@@ -543,7 +539,7 @@ static int fingerprint_remove(struct fingerprint_device *device,uint32_t __unuse
         // Look for this finger ID in our table.
         pthread_mutex_lock(&qdev->lock);
         for (idx = 0; idx < MAX_NUM_FINGERS; idx++) {
-            LOGD("state:%d   fid:%d  filename:%d",qdev->listener.state, qdev->listener.fingerid[idx], qdev->listener.fp_filename[idx]);
+            LOGD("state:%d   fid:%"PRIx64"  filename:%d",qdev->listener.state, qdev->listener.fingerid[idx], qdev->listener.fp_filename[idx]);
             if (qdev->listener.fingerid[idx] == fid &&
                 qdev->listener.secureid[idx] != 0) {
                 // Found it!
@@ -856,8 +852,34 @@ static int fingerprint_close(hw_device_t* device) {
     pthread_mutex_destroy(&qdev->lock);
     free(qdev);
 
+    #ifdef HIDL_FEATURE
+    if (fingerHal != NULL){
+        finger_destroy(fingerHal);
+    }
+    #endif
+
     return 0;
 }
+
+#ifdef HIDL_FEATURE
+static void send_hidl_Message(finger_hal_t *self, const unsigned char *buffer, uint32_t size,
+                                    void *ctx, finger_result_cb_t result_cb) {
+    if (self == NULL || ctx == NULL || result_cb == NULL) {
+        LOGE("send_hidl_Message NULL!");
+        return;
+    }
+    (void) size;
+    finger_set_callback(self, ctx, result_cb);
+    cmd_app_to_hal((const uint32_t *)buffer);
+}
+
+void notify_back(const unsigned char *buffer, uint32_t size) {
+    if (fingerHal != NULL) {
+        finger_notify(fingerHal, buffer, size);
+    }
+}
+
+#endif
 
 static int fingerprint_open(const hw_module_t* module, const char __unused *id, hw_device_t** device){
 
@@ -893,6 +915,14 @@ static int fingerprint_open(const hw_module_t* module, const char __unused *id, 
     qdev->device.notify = NULL;
 
     fingerprintDevice = &qdev->device;
+    #ifdef HIDL_FEATURE
+    fingerHal = finger_hal_new(qdev);
+    if (fingerHal != NULL){
+        fingerHal->sendMessage = send_hidl_Message;
+        add_hidl_service(fingerHal);
+    }
+    
+    #endif
 
     // init and create listener thread
     pthread_mutex_init(&qdev->lock, NULL);
